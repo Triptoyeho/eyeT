@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>משחק עוקב עיניים</title>
+<title>משחק אישונים</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
@@ -28,13 +28,14 @@ body {
   position: fixed;
   left: 10px;
   bottom: 10px;
-  width: 120px;
-  height: 160px;
+  width: 125px;
+  height: 165px;
   object-fit: cover;
-  border-radius: 16px;
+  border-radius: 18px;
   transform: scaleX(-1);
-  opacity: 0.8;
-  z-index: 5;
+  opacity: 0.85;
+  z-index: 6;
+  border: 3px solid white;
 }
 
 #panel {
@@ -42,12 +43,12 @@ body {
   top: 10px;
   right: 10px;
   left: 10px;
-  background: rgba(255,255,255,0.95);
+  background: rgba(255,255,255,0.96);
   border-radius: 18px;
   padding: 12px;
   text-align: center;
   box-shadow: 0 4px 18px rgba(0,0,0,0.18);
-  z-index: 10;
+  z-index: 20;
 }
 
 #title {
@@ -56,8 +57,9 @@ body {
 }
 
 #status {
-  margin-top: 5px;
+  margin-top: 6px;
   font-size: 14px;
+  line-height: 1.45;
   color: #333;
 }
 
@@ -75,6 +77,19 @@ button {
   background: #6f8f72;
   color: white;
   font-size: 16px;
+}
+
+#faceGuide {
+  position: fixed;
+  left: 50%;
+  top: 52%;
+  width: 230px;
+  height: 300px;
+  transform: translate(-50%, -50%);
+  border: 5px dashed rgba(111,143,114,0.65);
+  border-radius: 50%;
+  z-index: 2;
+  display: none;
 }
 
 #target {
@@ -102,7 +117,7 @@ button {
   opacity: 0.65;
   transform: translate(-50%, -50%);
   display: none;
-  z-index: 6;
+  z-index: 10;
 }
 
 #ring {
@@ -116,6 +131,31 @@ button {
   z-index: 3;
 }
 
+#calibrationPoint {
+  position: absolute;
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: #6f8f72;
+  border: 5px solid white;
+  box-shadow: 0 0 22px rgba(0,0,0,0.28);
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 12;
+}
+
+#calibrationPoint::after {
+  content: "";
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  background: white;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
 #finish {
   position: fixed;
   inset: 0;
@@ -124,7 +164,7 @@ button {
   align-items: center;
   justify-content: center;
   text-align: center;
-  z-index: 20;
+  z-index: 30;
 }
 
 #finishBox {
@@ -142,12 +182,14 @@ button {
   <video id="video" autoplay playsinline muted></video>
 
   <div id="panel">
-    <div id="title">משחק מבט 👁️</div>
+    <div id="title">משחק אישונים 👁️</div>
     <div id="status">לחצי התחלה ואשרי מצלמה</div>
     <div id="score">ניקוד: 0</div>
-    <button onclick="startGame()">התחלה</button>
+    <button id="startBtn" onclick="startGame()">התחלה</button>
   </div>
 
+  <div id="faceGuide"></div>
+  <div id="calibrationPoint"></div>
   <div id="ring"></div>
   <div id="target">⭐</div>
   <div id="cursor"></div>
@@ -170,6 +212,11 @@ const statusEl = document.getElementById("status");
 const scoreEl = document.getElementById("score");
 const finish = document.getElementById("finish");
 const finalText = document.getElementById("finalText");
+const calibrationPoint = document.getElementById("calibrationPoint");
+const faceGuide = document.getElementById("faceGuide");
+const startBtn = document.getElementById("startBtn");
+
+let phase = "idle";
 
 let score = 0;
 let maxScore = 10;
@@ -178,11 +225,21 @@ let targetX = 0;
 let targetY = 0;
 
 let dwellStart = null;
-const dwellNeeded = 850;
-const hitRadius = 95;
+const dwellNeeded = 900;
+const hitRadius = 100;
 
 let smoothX = window.innerWidth / 2;
 let smoothY = window.innerHeight / 2;
+
+let rawGazeX = 0.5;
+let rawGazeY = 0.5;
+
+let calibrationSamples = [];
+let calibrationIndex = 0;
+
+let centerRaw = { x: 0.5, y: 0.5 };
+let scaleX = 5.2;
+let scaleY = 6.0;
 
 function setStatus(text) {
   statusEl.innerText = text;
@@ -192,9 +249,198 @@ function updateScore() {
   scoreEl.innerText = "ניקוד: " + score;
 }
 
+function getCalibrationPoints() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  return [
+    { name: "מרכז", x: w * 0.50, y: h * 0.52 },
+    { name: "שמאל", x: w * 0.22, y: h * 0.52 },
+    { name: "ימין", x: w * 0.78, y: h * 0.52 },
+    { name: "למעלה", x: w * 0.50, y: h * 0.28 },
+    { name: "למטה", x: w * 0.50, y: h * 0.78 }
+  ];
+}
+
+let calibrationPoints = getCalibrationPoints();
+
+function median(values) {
+  if (!values.length) return 0.5;
+  const sorted = [...values].sort((a,b) => a-b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function distance(x1, y1, x2, y2) {
+  return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
+}
+
+function getEyeData(lm) {
+  const leftIris = lm[468];
+  const rightIris = lm[473];
+
+  if (!leftIris || !rightIris) return null;
+
+  function eyeRatio(iris, outer, inner, top, bottom) {
+    const minX = Math.min(outer.x, inner.x);
+    const maxX = Math.max(outer.x, inner.x);
+    const minY = Math.min(top.y, bottom.y);
+    const maxY = Math.max(top.y, bottom.y);
+
+    return {
+      x: (iris.x - minX) / (maxX - minX),
+      y: (iris.y - minY) / (maxY - minY)
+    };
+  }
+
+  const leftRatio = eyeRatio(lm[468], lm[33], lm[133], lm[159], lm[145]);
+  const rightRatio = eyeRatio(lm[473], lm[263], lm[362], lm[386], lm[374]);
+
+  return {
+    x: 1 - ((leftRatio.x + rightRatio.x) / 2),
+    y: (leftRatio.y + rightRatio.y) / 2
+  };
+}
+
+function analyzeFace(lm) {
+  const leftEye = lm[33];
+  const rightEye = lm[263];
+  const chin = lm[152];
+  const forehead = lm[10];
+
+  const faceCenterX = (leftEye.x + rightEye.x) / 2;
+  const faceCenterY = (forehead.y + chin.y) / 2;
+
+  const faceHeight = Math.abs(chin.y - forehead.y);
+  const eyeDistance = Math.abs(rightEye.x - leftEye.x);
+
+  let messages = [];
+
+  if (faceCenterX < 0.40) messages.push("הזיזי את הפנים קצת ימינה");
+  if (faceCenterX > 0.60) messages.push("הזיזי את הפנים קצת שמאלה");
+  if (faceCenterY < 0.38) messages.push("הורידי מעט את הפנים");
+  if (faceCenterY > 0.62) messages.push("הרימי מעט את הפנים");
+
+  if (faceHeight < 0.36 || eyeDistance < 0.21) messages.push("התקרבי קצת למסך");
+  if (faceHeight > 0.62 || eyeDistance > 0.36) messages.push("התרחקי קצת מהמסך");
+
+  const good =
+    faceCenterX >= 0.40 &&
+    faceCenterX <= 0.60 &&
+    faceCenterY >= 0.38 &&
+    faceCenterY <= 0.62 &&
+    faceHeight >= 0.36 &&
+    faceHeight <= 0.62 &&
+    eyeDistance >= 0.21 &&
+    eyeDistance <= 0.36;
+
+  return { good, messages };
+}
+
+function showNextCalibrationPoint() {
+  calibrationPoints = getCalibrationPoints();
+
+  if (calibrationIndex >= calibrationPoints.length) {
+    finishCalibration();
+    return;
+  }
+
+  const p = calibrationPoints[calibrationIndex];
+
+  calibrationSamples = [];
+
+  calibrationPoint.style.left = p.x + "px";
+  calibrationPoint.style.top = p.y + "px";
+  calibrationPoint.style.display = "block";
+
+  setStatus("כיול: הסתכלי על הנקודה הירוקה ולא להזיז את הראש. נקודה: " + p.name);
+
+  setTimeout(() => {
+    collectCalibrationPoint();
+  }, 700);
+}
+
+function collectCalibrationPoint() {
+  const p = calibrationPoints[calibrationIndex];
+
+  let samples = [];
+  let start = Date.now();
+
+  const interval = setInterval(() => {
+    samples.push({ x: rawGazeX, y: rawGazeY });
+
+    if (Date.now() - start >= 1200) {
+      clearInterval(interval);
+
+      const medX = median(samples.map(s => s.x));
+      const medY = median(samples.map(s => s.y));
+
+      calibrationSamples.push({
+        name: p.name,
+        screenX: p.x,
+        screenY: p.y,
+        rawX: medX,
+        rawY: medY
+      });
+
+      calibrationIndex++;
+      showNextCalibrationPoint();
+    }
+  }, 60);
+}
+
+function finishCalibration() {
+  calibrationPoint.style.display = "none";
+
+  const center = calibrationSamples.find(p => p.name === "מרכז");
+  const left = calibrationSamples.find(p => p.name === "שמאל");
+  const right = calibrationSamples.find(p => p.name === "ימין");
+  const up = calibrationSamples.find(p => p.name === "למעלה");
+  const down = calibrationSamples.find(p => p.name === "למטה");
+
+  if (center) {
+    centerRaw = { x: center.rawX, y: center.rawY };
+  }
+
+  if (left && right && Math.abs(right.rawX - left.rawX) > 0.02) {
+    scaleX = 0.56 / Math.abs(right.rawX - left.rawX);
+  }
+
+  if (up && down && Math.abs(down.rawY - up.rawY) > 0.02) {
+    scaleY = 0.50 / Math.abs(down.rawY - up.rawY);
+  }
+
+  phase = "play";
+
+  faceGuide.style.display = "none";
+  target.style.display = "flex";
+  ring.style.display = "block";
+  cursor.style.display = "block";
+
+  moveTarget();
+
+  setStatus("הכיול הסתיים ✅ עכשיו הסתכלי על הכוכב והחזיקי עליו רגע");
+}
+
+function mapGazeToScreen() {
+  let x = window.innerWidth / 2 + (rawGazeX - centerRaw.x) * window.innerWidth * scaleX;
+  let y = window.innerHeight / 2 + (rawGazeY - centerRaw.y) * window.innerHeight * scaleY;
+
+  x = Math.max(0, Math.min(window.innerWidth, x));
+  y = Math.max(0, Math.min(window.innerHeight, y));
+
+  smoothX = smoothX * 0.78 + x * 0.22;
+  smoothY = smoothY * 0.78 + y * 0.22;
+
+  cursor.style.left = smoothX + "px";
+  cursor.style.top = smoothY + "px";
+
+  return { x: smoothX, y: smoothY };
+}
+
 function moveTarget() {
   const margin = 80;
-  const topMargin = 160;
+  const topMargin = 165;
 
   targetX = margin + Math.random() * (window.innerWidth - margin * 2);
   targetY = topMargin + Math.random() * (window.innerHeight - topMargin - margin);
@@ -207,10 +453,6 @@ function moveTarget() {
 
   dwellStart = null;
   ring.style.borderColor = "rgba(111,143,114,0.25)";
-}
-
-function distance(x1, y1, x2, y2) {
-  return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
 }
 
 function checkHit(x, y) {
@@ -237,7 +479,6 @@ function checkHit(x, y) {
       if (score >= maxScore) {
         finishGame();
       } else {
-        setStatus("פגיעה! המשיכי לכוכב הבא");
         moveTarget();
       }
     }
@@ -248,100 +489,67 @@ function checkHit(x, y) {
 }
 
 function finishGame() {
+  phase = "done";
   target.style.display = "none";
   ring.style.display = "none";
   cursor.style.display = "none";
+
   finalText.innerText = "הניקוד שלך: " + score + " מתוך " + maxScore;
   finish.style.display = "flex";
 }
 
 function onResults(results) {
   if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-    setStatus("לא מזהה פנים. התקרבי מעט למצלמה");
+    setStatus("לא מזהה פנים. הכניסי את הפנים למסגרת");
     return;
   }
 
   const lm = results.multiFaceLandmarks[0];
 
-  // גבולות עין שמאל
-  const leftOuter = lm[33];
-  const leftInner = lm[133];
-  const leftTop = lm[159];
-  const leftBottom = lm[145];
+  const eyeData = getEyeData(lm);
 
-  // גבולות עין ימין
-  const rightOuter = lm[263];
-  const rightInner = lm[362];
-  const rightTop = lm[386];
-  const rightBottom = lm[374];
-
-  // מרכזי אישונים / איריס
-  const leftIris = lm[468];
-  const rightIris = lm[473];
-
-  if (!leftIris || !rightIris) {
-    setStatus("לא מצליח לזהות אישונים. נסי תאורה טובה יותר.");
+  if (!eyeData) {
+    setStatus("מזהה פנים, אבל לא מזהה אישונים. התקרבי מעט ושפרי תאורה");
     return;
   }
 
-  function eyeRatio(iris, outer, inner, top, bottom) {
-    const minX = Math.min(outer.x, inner.x);
-    const maxX = Math.max(outer.x, inner.x);
-    const minY = Math.min(top.y, bottom.y);
-    const maxY = Math.max(top.y, bottom.y);
+  rawGazeX = eyeData.x;
+  rawGazeY = eyeData.y;
 
-    const xRatio = (iris.x - minX) / (maxX - minX);
-    const yRatio = (iris.y - minY) / (maxY - minY);
+  if (phase === "positioning") {
+    const face = analyzeFace(lm);
 
-    return { x: xRatio, y: yRatio };
+    faceGuide.style.display = "block";
+
+    if (!face.good) {
+      setStatus(face.messages.join(" | "));
+    } else {
+      setStatus("מעולה ✅ הפנים במקום. מתחילים כיול...");
+      phase = "calibration";
+      setTimeout(showNextCalibrationPoint, 800);
+    }
   }
 
-  const leftRatio = eyeRatio(leftIris, leftOuter, leftInner, leftTop, leftBottom);
-  const rightRatio = eyeRatio(rightIris, rightOuter, rightInner, rightTop, rightBottom);
-
-  // ממוצע בין שתי העיניים
-  let gazeXRatio = (leftRatio.x + rightRatio.x) / 2;
-  let gazeYRatio = (leftRatio.y + rightRatio.y) / 2;
-
-  // בגלל מצלמת סלפי צריך היפוך אופקי
-  gazeXRatio = 1 - gazeXRatio;
-
-  // הגברה — כי האישון זז מעט מאוד בתוך העין
-  const sensitivityX = 5.0;
-  const sensitivityY = 7.0;
-
-  let screenX = window.innerWidth / 2 + (gazeXRatio - 0.5) * window.innerWidth * sensitivityX;
-  let screenY = window.innerHeight / 2 + (gazeYRatio - 0.5) * window.innerHeight * sensitivityY;
-
-  // שמירה שלא יברח מחוץ למסך
-  screenX = Math.max(0, Math.min(window.innerWidth, screenX));
-  screenY = Math.max(0, Math.min(window.innerHeight, screenY));
-
-  // החלקה
-  smoothX = smoothX * 0.78 + screenX * 0.22;
-  smoothY = smoothY * 0.78 + screenY * 0.22;
-
-  cursor.style.left = smoothX + "px";
-  cursor.style.top = smoothY + "px";
-
-  checkHit(smoothX, smoothY);
+  if (phase === "play") {
+    const gaze = mapGazeToScreen();
+    checkHit(gaze.x, gaze.y);
+  }
 }
 
 async function startGame() {
   try {
     setStatus("מפעילה מצלמה...");
+    startBtn.style.display = "none";
 
     const faceMesh = new FaceMesh({
-      locateFile: file => {
-        return "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/" + file;
-      }
+      locateFile: file => "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/" + file
     });
 
     faceMesh.setOptions({
       maxNumFaces: 1,
       refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
+      minDetectionConfidence: 0.65,
+      minTrackingConfidence: 0.65
     });
 
     faceMesh.onResults(onResults);
@@ -357,17 +565,12 @@ async function startGame() {
 
     await camera.start();
 
-    target.style.display = "flex";
-    ring.style.display = "block";
-    cursor.style.display = "block";
-
-    moveTarget();
-
-    setStatus("המשחק התחיל. הזיזי בעדינות את המבט/הפנים לכיוון הכוכב והחזיקי עליו רגע.");
+    phase = "positioning";
+    setStatus("מקמי את הפנים בתוך המסגרת. החזיקי את הטלפון יציב מול הפנים.");
 
   } catch (err) {
     console.error(err);
-    setStatus("שגיאה בהפעלת מצלמה. פתחי דרך Chrome/Safari רגיל, לא מתוך וואטסאפ, ואשרי מצלמה.");
+    setStatus("שגיאה בהפעלת מצלמה. פתחי דרך Chrome/Safari רגיל ואשרי מצלמה.");
   }
 }
 </script>
