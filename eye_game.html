@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>משחק עוקב עיניים</title>
+
+<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f7f3ee;
+    overflow: hidden;
+    touch-action: manipulation;
+  }
+
+  #app {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #topPanel {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    z-index: 50;
+    background: rgba(255,255,255,0.94);
+    border-radius: 18px;
+    padding: 12px;
+    box-shadow: 0 5px 18px rgba(0,0,0,0.18);
+    text-align: center;
+  }
+
+  #title {
+    font-weight: bold;
+    font-size: 20px;
+    margin-bottom: 5px;
+  }
+
+  #status {
+    font-size: 14px;
+    color: #333;
+    line-height: 1.4;
+  }
+
+  #score {
+    font-weight: bold;
+    margin-top: 6px;
+    font-size: 18px;
+  }
+
+  button {
+    border: none;
+    border-radius: 14px;
+    padding: 11px 16px;
+    margin: 6px 4px 0;
+    font-size: 16px;
+    background: #6f8f72;
+    color: white;
+    cursor: pointer;
+  }
+
+  button.secondary {
+    background: #9d7f68;
+  }
+
+  #calibrationPoint {
+    position: absolute;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    background: #e58f65;
+    border: 5px solid white;
+    box-shadow: 0 0 18px rgba(0,0,0,0.3);
+    z-index: 30;
+    display: none;
+    transform: translate(-50%, -50%);
+  }
+
+  #calibrationPoint::after {
+    content: "";
+    position: absolute;
+    width: 13px;
+    height: 13px;
+    background: white;
+    border-radius: 50%;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  #target {
+    position: absolute;
+    width: 82px;
+    height: 82px;
+    border-radius: 50%;
+    background: #e58f65;
+    border: 5px solid white;
+    box-shadow: 0 0 22px rgba(0,0,0,0.25);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 35px;
+    z-index: 20;
+    transform: translate(-50%, -50%);
+  }
+
+  #progressRing {
+    position: absolute;
+    width: 105px;
+    height: 105px;
+    border-radius: 50%;
+    border: 7px solid rgba(111,143,114,0.25);
+    display: none;
+    transform: translate(-50%, -50%);
+    z-index: 18;
+  }
+
+  #gazeDot {
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    background: #222;
+    border-radius: 50%;
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: 40;
+    transform: translate(-50%, -50%);
+    display: none;
+  }
+
+  #finishScreen {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: rgba(247,243,238,0.97);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 25px;
+  }
+
+  #finishBox {
+    background: white;
+    border-radius: 24px;
+    padding: 25px;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+    max-width: 360px;
+  }
+
+  #finishBox h1 {
+    margin-top: 0;
+  }
+</style>
+</head>
+
+<body>
+
+<div id="app">
+
+  <div id="topPanel">
+    <div id="title">משחק עוקב עיניים 👁️</div>
+    <div id="status">לחצי על “התחלה”, אשרי מצלמה, ואז בצעי כיול.</div>
+    <div id="score">ניקוד: 0</div>
+    <button id="startBtn">התחלה</button>
+    <button id="restartBtn" class="secondary">איפוס</button>
+  </div>
+
+  <div id="calibrationPoint"></div>
+  <div id="progressRing"></div>
+  <div id="target">⭐</div>
+  <div id="gazeDot"></div>
+
+  <div id="finishScreen">
+    <div id="finishBox">
+      <h1>כל הכבוד! 🎉</h1>
+      <p id="finalScore"></p>
+      <button onclick="restartAll()">משחק חדש</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let score = 0;
+let gameStarted = false;
+let calibrated = false;
+
+let calibrationIndex = 0;
+let calibrationClicks = 0;
+const clicksPerPoint = 3;
+
+let targetX = 0;
+let targetY = 0;
+
+let gazeInsideSince = null;
+const dwellRequired = 900;
+const hitRadius = 95;
+
+const maxScore = 10;
+
+const statusEl = document.getElementById("status");
+const scoreEl = document.getElementById("score");
+const startBtn = document.getElementById("startBtn");
+const restartBtn = document.getElementById("restartBtn");
+const calibrationPoint = document.getElementById("calibrationPoint");
+const target = document.getElementById("target");
+const gazeDot = document.getElementById("gazeDot");
+const progressRing = document.getElementById("progressRing");
+const finishScreen = document.getElementById("finishScreen");
+const finalScore = document.getElementById("finalScore");
+
+function getCalibrationPoints() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  return [
+    [w * 0.15, h * 0.22],
+    [w * 0.50, h * 0.22],
+    [w * 0.85, h * 0.22],
+    [w * 0.15, h * 0.50],
+    [w * 0.50, h * 0.50],
+    [w * 0.85, h * 0.50],
+    [w * 0.15, h * 0.80],
+    [w * 0.50, h * 0.80],
+    [w * 0.85, h * 0.80]
+  ];
+}
+
+let calibrationPoints = getCalibrationPoints();
+
+function setStatus(text) {
+  statusEl.innerText = text;
+}
+
+function updateScore() {
+  scoreEl.innerText = "ניקוד: " + score;
+}
+
+function showCalibrationPoint() {
+  calibrationPoints = getCalibrationPoints();
+
+  if (calibrationIndex >= calibrationPoints.length) {
+    finishCalibration();
+    return;
+  }
+
+  const [x, y] = calibrationPoints[calibrationIndex];
+
+  calibrationPoint.style.left = x + "px";
+  calibrationPoint.style.top = y + "px";
+  calibrationPoint.style.display = "block";
+
+  setStatus(
+    "כיול: הסתכלי על הנקודה ולחצי עליה " +
+    clicksPerPoint +
+    " פעמים. נקודה " +
+    (calibrationIndex + 1) +
+    " מתוך " +
+    calibrationPoints.length
+  );
+}
+
+calibrationPoint.addEventListener("click", function () {
+  if (!gameStarted || calibrated) return;
+
+  const [x, y] = calibrationPoints[calibrationIndex];
+
+  webgazer.recordScreenPosition(x, y, "click");
+
+  calibrationClicks++;
+
+  setStatus(
+    "נקודת כיול נקלטה: " +
+    calibrationClicks +
+    "/" +
+    clicksPerPoint
+  );
+
+  if (calibrationClicks >= clicksPerPoint) {
+    calibrationClicks = 0;
+    calibrationIndex++;
+    setTimeout(showCalibrationPoint, 350);
+  }
+});
+
+async function startGame() {
+  try {
+    setStatus("מפעילה מצלמה... אשרי הרשאת מצלמה.");
+
+    await webgazer
+      .setRegression("ridge")
+      .setTracker("TFFacemesh")
+      .setGazeListener(function (data) {
+        if (!data || !calibrated) return;
+
+        const x = data.x;
+        const y = data.y;
+
+        gazeDot.style.display = "block";
+        gazeDot.style.left = x + "px";
+        gazeDot.style.top = y + "px";
+
+        checkGazeHit(x, y);
+      })
+      .begin();
+
+    webgazer.showVideoPreview(true);
+    webgazer.showPredictionPoints(false);
+    webgazer.applyKalmanFilter(true);
+
+    gameStarted = true;
+    startBtn.style.display = "none";
+
+    setTimeout(() => {
+      showCalibrationPoint();
+    }, 1000);
+
+  } catch (err) {
+    setStatus("שגיאה בהפעלת מצלמה. ודאי שהדף נפתח דרך HTTPS ושהרשאת מצלמה אושרה.");
+    console.error(err);
+  }
+}
+
+function finishCalibration() {
+  calibrated = true;
+  calibrationPoint.style.display = "none";
+
+  setStatus("הכיול הסתיים. עכשיו המשחק עובד עם העיניים בלבד — הסתכלי על הכוכב עד שהוא נאסף.");
+  moveTarget();
+
+  target.style.display = "flex";
+  progressRing.style.display = "block";
+}
+
+function moveTarget() {
+  const marginTop = 155;
+  const margin = 70;
+
+  targetX = margin + Math.random() * (window.innerWidth - margin * 2);
+  targetY = marginTop + Math.random() * (window.innerHeight - marginTop - margin);
+
+  target.style.left = targetX + "px";
+  target.style.top = targetY + "px";
+
+  progressRing.style.left = targetX + "px";
+  progressRing.style.top = targetY + "px";
+
+  gazeInsideSince = null;
+  progressRing.style.borderColor = "rgba(111,143,114,0.25)";
+}
+
+function distance(x1, y1, x2, y2) {
+  return Math.sqrt(
+    Math.pow(x1 - x2, 2) +
+    Math.pow(y1 - y2, 2)
+  );
+}
+
+function checkGazeHit(gazeX, gazeY) {
+  const d = distance(gazeX, gazeY, targetX, targetY);
+
+  if (d <= hitRadius) {
+    if (gazeInsideSince === null) {
+      gazeInsideSince = Date.now();
+    }
+
+    const elapsed = Date.now() - gazeInsideSince;
+    const progress = Math.min(elapsed / dwellRequired, 1);
+
+    progressRing.style.borderColor =
+      progress >= 0.75 ? "#6f8f72" :
+      progress >= 0.45 ? "#c7a76c" :
+      "rgba(111,143,114,0.45)";
+
+    if (elapsed >= dwellRequired) {
+      score++;
+      updateScore();
+
+      if (score >= maxScore) {
+        finishGame();
+      } else {
+        setStatus("פגיעה! המשיכי לכוכב הבא.");
+        moveTarget();
+      }
+    }
+
+  } else {
+    gazeInsideSince = null;
+    progressRing.style.borderColor = "rgba(111,143,114,0.25)";
+  }
+}
+
+function finishGame() {
+  target.style.display = "none";
+  progressRing.style.display = "none";
+  gazeDot.style.display = "none";
+
+  finalScore.innerText = "הניקוד שלך: " + score + " מתוך " + maxScore;
+  finishScreen.style.display = "flex";
+
+  setStatus("המשחק הסתיים.");
+}
+
+function restartAll() {
+  location.reload();
+}
+
+function resetGame() {
+  if (window.webgazer) {
+    webgazer.clearData();
+  }
+  location.reload();
+}
+
+startBtn.addEventListener("click", startGame);
+restartBtn.addEventListener("click", resetGame);
+
+window.addEventListener("resize", function () {
+  calibrationPoints = getCalibrationPoints();
+});
+</script>
+
+</body>
+</html>
