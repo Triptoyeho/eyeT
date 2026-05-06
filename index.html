@@ -307,8 +307,8 @@ function onResults(results) {
   gazeXRatio = 1 - gazeXRatio;
 
   // הגברה — כי האישון זז מעט מאוד בתוך העין
-  const sensitivityX = 4.0;
-  const sensitivityY = 5.0;
+  const sensitivityX = 4.2;
+  const sensitivityY = 5.2;
 
   let screenX = window.innerWidth / 2 + (gazeXRatio - 0.5) * window.innerWidth * sensitivityX;
   let screenY = window.innerHeight / 2 + (gazeYRatio - 0.5) * window.innerHeight * sensitivityY;
