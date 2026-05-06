@@ -261,23 +261,65 @@ function onResults(results) {
     return;
   }
 
-  const landmarks = results.multiFaceLandmarks[0];
+  const lm = results.multiFaceLandmarks[0];
 
-  const nose = landmarks[1];
-  const leftEye = landmarks[33];
-  const rightEye = landmarks[263];
+  // גבולות עין שמאל
+  const leftOuter = lm[33];
+  const leftInner = lm[133];
+  const leftTop = lm[159];
+  const leftBottom = lm[145];
 
-  const faceCenterX = (leftEye.x + rightEye.x) / 2;
-  const faceCenterY = nose.y;
+  // גבולות עין ימין
+  const rightOuter = lm[263];
+  const rightInner = lm[362];
+  const rightTop = lm[386];
+  const rightBottom = lm[374];
 
-  const normalizedX = 1 - faceCenterX;
-  const normalizedY = faceCenterY;
+  // מרכזי אישונים / איריס
+  const leftIris = lm[468];
+  const rightIris = lm[473];
 
-  const screenX = normalizedX * window.innerWidth;
-  const screenY = normalizedY * window.innerHeight * 1.35 - 120;
+  if (!leftIris || !rightIris) {
+    setStatus("לא מצליח לזהות אישונים. נסי תאורה טובה יותר.");
+    return;
+  }
 
-  smoothX = smoothX * 0.82 + screenX * 0.18;
-  smoothY = smoothY * 0.82 + screenY * 0.18;
+  function eyeRatio(iris, outer, inner, top, bottom) {
+    const minX = Math.min(outer.x, inner.x);
+    const maxX = Math.max(outer.x, inner.x);
+    const minY = Math.min(top.y, bottom.y);
+    const maxY = Math.max(top.y, bottom.y);
+
+    const xRatio = (iris.x - minX) / (maxX - minX);
+    const yRatio = (iris.y - minY) / (maxY - minY);
+
+    return { x: xRatio, y: yRatio };
+  }
+
+  const leftRatio = eyeRatio(leftIris, leftOuter, leftInner, leftTop, leftBottom);
+  const rightRatio = eyeRatio(rightIris, rightOuter, rightInner, rightTop, rightBottom);
+
+  // ממוצע בין שתי העיניים
+  let gazeXRatio = (leftRatio.x + rightRatio.x) / 2;
+  let gazeYRatio = (leftRatio.y + rightRatio.y) / 2;
+
+  // בגלל מצלמת סלפי צריך היפוך אופקי
+  gazeXRatio = 1 - gazeXRatio;
+
+  // הגברה — כי האישון זז מעט מאוד בתוך העין
+  const sensitivityX = 4.5;
+  const sensitivityY = 5.5;
+
+  let screenX = window.innerWidth / 2 + (gazeXRatio - 0.5) * window.innerWidth * sensitivityX;
+  let screenY = window.innerHeight / 2 + (gazeYRatio - 0.5) * window.innerHeight * sensitivityY;
+
+  // שמירה שלא יברח מחוץ למסך
+  screenX = Math.max(0, Math.min(window.innerWidth, screenX));
+  screenY = Math.max(0, Math.min(window.innerHeight, screenY));
+
+  // החלקה
+  smoothX = smoothX * 0.78 + screenX * 0.22;
+  smoothY = smoothY * 0.78 + screenY * 0.22;
 
   cursor.style.left = smoothX + "px";
   cursor.style.top = smoothY + "px";
