@@ -298,7 +298,7 @@ async function startGame() {
 
     await webgazer
       .setRegression("ridge")
-      .setTracker("TFFacemesh")
+      .setTracker("clmtrackr")
       .setGazeListener(function (data) {
         if (!data || !calibrated) return;
 
